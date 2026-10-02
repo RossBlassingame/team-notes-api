@@ -167,8 +167,12 @@ Alternatives I considered:
   with the team. Leaving or being removed doesn't unshare the notes you shared with the team;
   you can still unshare them afterwards. Teams can't be deleted.
 - **Open registration.** Anyone can create a user.
-- **Search is basic.** It's a substring `LIKE`: a full scan, with case-insensitive matching for
-  ASCII only.
+- **Listing and search scan every note.** The `OR` in the access predicate keeps SQLite from
+  using the owner index, so even a plain `GET /notes` reads the whole table. Search is a
+  substring `LIKE`, with case-insensitive matching for ASCII only.
+- **Write-lock waits time out.** A write that waits more than 5 seconds for SQLite's write lock
+  (`busy_timeout`) fails with a plain-text `500`. It should be a `503` with `Retry-After`; the
+  real fix is Postgres.
 - **Offset pagination** can skip or repeat notes when notes are edited between page requests.
 - **`If-Match` support is minimal.** Only a single exact strong ETag is accepted; `*`, weak
   tags, and lists get `412`. The ETag covers content only, not `shared_with`.
@@ -232,5 +236,5 @@ I built this with Claude Code, an AI coding agent:
 - **Checking.** The walkthrough above was run against the live server, and the tests were run
   from a fresh clone, before committing.
 - **Timing.** The agent writes code fast: the build commits, from scaffold through search, span
-  about 10 minutes. Most of the time went into the plan, its review rounds, and the code
+  under 8 minutes. Most of the time went into the plan, its review rounds, and the code
   reviews.
