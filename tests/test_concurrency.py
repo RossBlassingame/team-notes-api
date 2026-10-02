@@ -1,3 +1,6 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 
@@ -57,3 +60,19 @@ def test_update_after_delete_is_404(client, alice, note):
 @pytest.mark.parametrize("etag", [None, '"7"', '"1"'])
 def test_non_reader_gets_404_regardless_of_if_match(client, bob, note, etag):
     assert patch(client, bob, note, etag=etag).status_code == 404
+
+
+def test_parallel_saves_with_the_same_etag_let_exactly_one_win(client, alice, note):
+    # Real threads racing one conditional UPDATE: no lost update, no 500s, no lock errors.
+    writers = 16
+    barrier = threading.Barrier(writers)
+
+    def save(i):
+        barrier.wait()
+        return patch(client, alice, note, etag='"1"', body=f"writer {i}").status_code
+
+    with ThreadPoolExecutor(writers) as pool:
+        statuses = sorted(pool.map(save, range(writers)))
+
+    assert statuses == [200] + [412] * (writers - 1)
+    assert client.get(f"/notes/{note['id']}", headers=alice.headers).json()["version"] == 2

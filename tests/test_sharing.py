@@ -105,8 +105,11 @@ def test_unsharing_revokes_only_that_team(client, users, teams, note):
 
     assert unshare(client, alice, note, teams["platform"]).status_code == 204
 
-    assert get(client, users["bob"], note).status_code == 404
-    assert edit(client, users["bob"], note).status_code == 404
+    bob = users["bob"]
+    assert get(client, bob, note).status_code == 404
+    assert edit(client, bob, note).status_code == 404
+    assert client.get("/notes", headers=bob.headers).json()["items"] == []
+    assert client.get("/notes", params={"q": "Roadmap"}, headers=bob.headers).json()["items"] == []
     assert get(client, users["carol"], note).status_code == 200
     assert get(client, alice, note).json()["shared_with"] == [teams["design"]]
 
@@ -177,3 +180,14 @@ def test_sharing_a_note_deleted_mid_request_is_404(client, users, teams, note, m
     monkeypatch.setattr(notes_routes, "is_member", delete_note_then_check)
 
     assert share(client, users["alice"], note, teams["platform"]).status_code == 404
+
+
+def test_team_members_can_search_shared_notes(client, users, teams, note):
+    share(client, users["alice"], note, teams["platform"])
+
+    def found(user):
+        response = client.get("/notes", params={"q": "roadmap"}, headers=user.headers)
+        return [item["id"] for item in response.json()["items"]]
+
+    assert found(users["bob"]) == [note["id"]]
+    assert found(users["carol"]) == []
