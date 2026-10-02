@@ -1,9 +1,12 @@
 """Who can see a note: the single source of truth for note access.
 
-Every note query ANDs `CAN_READ` in (bound with `:me`), so list, fetch, and update can
-never disagree about visibility. You can read a note if you own it or belong to any team
-it is shared with. Anyone who can read a note can edit its content; only the owner can
-delete it or change who it is shared with.
+Every note read (list, search, fetch) and the content update AND `CAN_READ` in (bound with
+`:me`), so they can never disagree about visibility. Owner-only writes (delete, share,
+unshare) first fetch the note through it, then check ownership.
+
+You can read a note if you own it or belong to any team it is shared with. Anyone who can
+read a note can edit its content; only the owner can delete it or change who it is shared
+with.
 """
 
 import sqlite3

@@ -20,12 +20,12 @@ to reset.
 ## Tests
 
 ```bash
-uv run pytest                                          # 108 tests, a few seconds
+uv run pytest                                          # 125 tests, a few seconds
 uv run ruff check . && uv run ruff format --check .
 ```
 
-Tests drive the real app over HTTP against a fresh SQLite file per test. Nothing is mocked.
-CI runs lint and tests on every push.
+Tests call the real app through FastAPI's in-process `TestClient`, with a fresh SQLite file per
+test. Nothing is mocked. CI runs lint and tests on pushes to `main` and on pull requests.
 
 ## Walkthrough
 
@@ -57,7 +57,7 @@ curl -s -X PATCH $BASE/notes/$NOTE -H "Authorization: Bearer $BOB" -H "$JSON" \
 # Alice also read version 1. Her save is rejected instead of overwriting Bob's edit.
 curl -s -w '\n' -X PATCH $BASE/notes/$NOTE -H "Authorization: Bearer $ALICE" -H "$JSON" \
   -H 'If-Match: "1"' -d '{"body":"Q1: auth, billing"}'
-# {"detail":"Note changed since you last read it; fetch it again and reapply your edit"}  (412)
+# {"detail":"If-Match doesn't match the note's current ETag; fetch it again and reapply your edit"}  (412)
 ```
 
 ## API
@@ -83,7 +83,8 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 
 | | Owner | Member of a team it's shared with | Anyone else |
 |---|---|---|---|
-| Read, list, search, edit content | yes | yes | `404` |
+| Read, edit content | yes | yes | `404` |
+| See it in list and search results | yes | yes | not included |
 | Delete, share, unshare | yes | `403` | `404` |
 
 ## Design choices
@@ -154,8 +155,9 @@ Alternatives I considered:
 - **Offset pagination** can skip or repeat notes when notes are edited between page requests.
 - **`If-Match` support is minimal.** Only a single exact strong ETag is accepted; `*`, weak
   tags, and lists get `412`. The ETag covers content only, not `shared_with`.
-- **No load testing.** The conflict tests are sequential. That's sufficient because the version
-  check and the write happen in one statement, but there is no load test.
+- **No request-size limit.** The note body is capped at 100,000 characters, but nothing caps the
+  raw request size. That belongs at the reverse proxy.
+- **No load testing.** The parallel-save test races 16 threads in-process. It isn't a load test.
 
 ## With more time
 
@@ -208,6 +210,14 @@ Each commit is one vertical slice with its own tests, and lint and tests pass at
 10. `feat(notes): add search and pagination to note listing`
 11. `docs: write README with design choices and tradeoffs`
 
+After a separate review of the code, these commits followed:
+
+12. `fix: return 4xx instead of 500 for out-of-range ids and unencodable input`
+13. `fix(notes): read back writes inside their transaction`
+14. `fix: make error responses consistent`
+15. `test: cover parallel saves, unsharing from lists, and shared-note search`
+16. `docs: correct README claims found in code review`
+
 ## How I used AI
 
 I built this with Claude Code, an AI coding agent:
@@ -217,4 +227,11 @@ I built this with Claude Code, an AI coding agent:
   product calls; for example, notes can be shared with multiple teams rather than one.
 - **Building.** The agent wrote the code and tests in the small slices above. Lint and the full
   test suite had to pass before each commit.
-- **Checking.** The walkthrough above was run against the live server before committing.
+- **Reviewing.** After the build, a fresh AI reviewer audited the code with reproduction
+  scripts. Commits 12–16 fix what it found: several malformed inputs that returned 500s, a race
+  in the read-back after an edit, inconsistent error shapes, and inaccurate claims in this
+  README.
+- **Checking.** The walkthrough above was run against the live server, and the tests were run
+  from a fresh clone, before committing.
+- **Timing.** The agent writes code fast: commits 2–11 span about 12 minutes. Most of the time
+  went into the plan, its review rounds, and the code review.
