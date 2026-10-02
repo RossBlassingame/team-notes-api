@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.auth import CurrentUser
 from app.db import Conn, now
 from app.policy import is_member
-from app.schemas import MemberAdd, TeamCreate, TeamList, TeamOut
+from app.schemas import MemberAdd, RowId, TeamCreate, TeamList, TeamOut
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -40,7 +40,7 @@ def list_teams(user: CurrentUser, conn: Conn) -> TeamList:
 
 
 @router.post("/{team_id}/members", status_code=status.HTTP_204_NO_CONTENT)
-def add_member(team_id: int, payload: MemberAdd, user: CurrentUser, conn: Conn) -> None:
+def add_member(team_id: RowId, payload: MemberAdd, user: CurrentUser, conn: Conn) -> None:
     if not is_member(conn, team_id, user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
     member = conn.execute(

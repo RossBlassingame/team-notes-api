@@ -8,7 +8,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 from app.auth import CurrentUser, User
 from app.db import Conn, now
 from app.policy import CAN_READ, is_member
-from app.schemas import NoteCreate, NoteList, NoteOut, NoteUpdate
+from app.schemas import MAX_INT, NoteCreate, NoteList, NoteOut, NoteUpdate, RowId
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -44,7 +44,8 @@ def expected_version(if_match: str | None) -> int:
             status.HTTP_428_PRECONDITION_REQUIRED,
             "Send If-Match with the ETag from your last read of this note",
         )
-    match = re.fullmatch(r'"(\d+)"', if_match.strip())
+    # Exactly the form we issue: "1", "2", ... (no leading zeros; bounded to fit SQLite).
+    match = re.fullmatch(r'"([1-9]\d{0,17})"', if_match.strip())
     if match is None:
         raise stale_note()
     return int(match.group(1))
@@ -100,7 +101,7 @@ def list_notes(
         str | None, Query(max_length=200, description="Case-insensitive text in title or body")
     ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=MAX_INT)] = 0,
 ) -> NoteList:
     """Notes you can read, most recently updated first."""
     where = CAN_READ
@@ -117,7 +118,7 @@ def list_notes(
 
 
 @router.get("/{note_id}")
-def get_note(note_id: int, user: CurrentUser, conn: Conn, response: Response) -> NoteOut:
+def get_note(note_id: RowId, user: CurrentUser, conn: Conn, response: Response) -> NoteOut:
     note = fetch_note(conn, note_id, user.id)
     response.headers["ETag"] = etag(note.version)
     return note
@@ -125,7 +126,7 @@ def get_note(note_id: int, user: CurrentUser, conn: Conn, response: Response) ->
 
 @router.patch("/{note_id}")
 def update_note(
-    note_id: int,
+    note_id: RowId,
     payload: NoteUpdate,
     user: CurrentUser,
     conn: Conn,
@@ -165,7 +166,7 @@ def update_note(
 
 
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_note(note_id: int, user: CurrentUser, conn: Conn) -> None:
+def delete_note(note_id: RowId, user: CurrentUser, conn: Conn) -> None:
     require_owner(fetch_note(conn, note_id, user.id), user)
     with conn:
         conn.execute("DELETE FROM notes WHERE id = :id", {"id": note_id})  # shares cascade
@@ -177,7 +178,7 @@ def delete_note(note_id: int, user: CurrentUser, conn: Conn) -> None:
     responses={201: {"description": "Shared"}, 204: {"description": "Already shared"}},
 )
 def share_note(
-    note_id: int, team_id: int, user: CurrentUser, conn: Conn, response: Response
+    note_id: RowId, team_id: RowId, user: CurrentUser, conn: Conn, response: Response
 ) -> None:
     require_owner(fetch_note(conn, note_id, user.id), user)
     if not is_member(conn, team_id, user.id):
@@ -195,7 +196,7 @@ def share_note(
 
 
 @router.delete("/{note_id}/shares/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
-def unshare_note(note_id: int, team_id: int, user: CurrentUser, conn: Conn) -> None:
+def unshare_note(note_id: RowId, team_id: RowId, user: CurrentUser, conn: Conn) -> None:
     require_owner(fetch_note(conn, note_id, user.id), user)
     with conn:
         conn.execute(

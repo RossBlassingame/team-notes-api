@@ -1,6 +1,12 @@
 from typing import Annotated
 
+from fastapi import Path
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+
+# SQLite integers are 64-bit; anything larger would overflow in the driver and 500.
+MAX_INT = 2**63 - 1
+RowId = Annotated[int, Path(ge=1, le=MAX_INT)]
+
 
 Username = Annotated[str, Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")]
 
