@@ -3,7 +3,7 @@ import re
 import sqlite3
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 
 from app.auth import CurrentUser, User
 from app.db import Conn, now
@@ -18,6 +18,15 @@ SELECT_NOTE = """
                AS shared_with
     FROM notes n
 """
+
+
+# SQLite's LIKE has no default escape character, so user input needs one to match literally.
+MATCHES_QUERY = r"(n.title LIKE :pattern ESCAPE '\' OR n.body LIKE :pattern ESCAPE '\')"
+
+
+def like_pattern(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def etag(version: int) -> str:
@@ -84,12 +93,27 @@ def create_note(payload: NoteCreate, user: CurrentUser, conn: Conn, response: Re
 
 
 @router.get("")
-def list_notes(user: CurrentUser, conn: Conn) -> NoteList:
+def list_notes(
+    user: CurrentUser,
+    conn: Conn,
+    q: Annotated[
+        str | None, Query(max_length=200, description="Case-insensitive text in title or body")
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> NoteList:
+    """Notes you can read, most recently updated first."""
+    where = CAN_READ
+    params: dict[str, object] = {"me": user.id, "limit": limit, "offset": offset}
+    if q:
+        where += f" AND {MATCHES_QUERY}"
+        params["pattern"] = like_pattern(q)
     rows = conn.execute(
-        f"{SELECT_NOTE} WHERE {CAN_READ} ORDER BY n.updated_at DESC, n.id DESC",
-        {"me": user.id},
+        f"{SELECT_NOTE} WHERE {where}"
+        " ORDER BY n.updated_at DESC, n.id DESC LIMIT :limit OFFSET :offset",
+        params,
     ).fetchall()
-    return NoteList(items=[to_note(row) for row in rows])
+    return NoteList(items=[to_note(row) for row in rows], limit=limit, offset=offset)
 
 
 @router.get("/{note_id}")

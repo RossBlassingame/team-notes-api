@@ -63,6 +63,8 @@ class NoteOut(BaseModel):
 
 class NoteList(BaseModel):
     items: list[NoteOut]
+    limit: int
+    offset: int
 
 
 TeamName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
