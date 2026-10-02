@@ -20,7 +20,7 @@ to reset.
 ## Tests
 
 ```bash
-uv run pytest                                          # 144 tests, a few seconds
+uv run pytest                                          # 152 tests, a few seconds
 uv run ruff check . && uv run ruff format --check .
 ```
 
@@ -71,7 +71,7 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 | `POST /teams` `{name}` | Create a team; the creator becomes a member |
 | `GET /teams` | Teams you belong to |
 | `POST /teams/{id}/members` `{username}` | Add someone to a team you're in (idempotent) |
-| `DELETE /teams/{id}/members/{username}` | Remove a member, or yourself to leave. Their access ends immediately. The last member can't leave (`409`). |
+| `DELETE /teams/{id}/members/{username}` | Remove a member, or yourself to leave. Their access ends immediately. The last member can't leave (`409`), and an unknown username gets `422`. |
 | `POST /notes` `{title, body?}` | Create a private note → `201`, `Location`, `ETag` |
 | `GET /notes?q=&limit=&offset=` | Notes you can read, most recently updated first. `q` searches title and body. |
 | `GET /notes/{id}` | One note, plus its `ETag` |
@@ -94,7 +94,9 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 
 Notes start private. The owner can share a note with any number of teams they belong to.
 Access is computed from team membership at query time and never copied, so removing someone
-from a team cuts off their access on their very next request.
+from a team cuts off their access on their very next request. Every write runs under SQLite's
+write lock (`BEGIN IMMEDIATE`), taken before the checks that guard it. So a member being removed
+can't slip a write through between "are you a member?" and the write itself.
 
 The most important property is that **one SQL predicate decides visibility**
 ([`app/policy.py`](app/policy.py)). It is ANDed into every note query: list, search, fetch,
@@ -147,9 +149,10 @@ Alternatives I considered:
 
 ## Known limitations
 
-- **Team membership is flat.** Any member can add or remove anyone, and there are no team
-  admins. Leaving a team doesn't unshare the notes you shared with it; you can still unshare
-  them afterwards. Teams can't be deleted.
+- **Team membership is flat.** Any member can add or remove anyone, including the team's
+  creator, and there are no team admins. Whoever is added can read and edit every note shared
+  with the team. Leaving or being removed doesn't unshare the notes you shared with the team;
+  you can still unshare them afterwards. Teams can't be deleted.
 - **Open registration.** Anyone can create a user.
 - **Search is basic.** It's a substring `LIKE`: a full scan, with case-insensitive matching for
   ASCII only.
@@ -219,6 +222,9 @@ After a separate review of the code, these commits followed:
 15. `test: cover parallel saves, unsharing from lists, and shared-note search`
 16. `docs: correct README claims found in code review`
 17. `feat(teams): let members remove members and leave teams`
+18. `fix: take the write lock before checks that guard a write`
+19. `fix(teams): reject unknown usernames when removing members`
+20. `docs: update README for member removal and its review`
 
 ## How I used AI
 
@@ -232,8 +238,12 @@ I built this with Claude Code, an AI coding agent:
 - **Reviewing.** After the build, a fresh AI reviewer audited the code with reproduction
   scripts. Commits 12–16 fix what it found: several malformed inputs that returned 500s, a race
   in the read-back after an edit, inconsistent error shapes, and inaccurate claims in this
-  README. Commit 17 closes the biggest gap it flagged: without a way to remove someone from a
-  team, access could never be revoked.
+  README.
+- **Member removal.** Commit 17 adds removing members, which the review rated the most serious
+  gap. (The README already listed it as a known limitation.) A second review of that commit
+  found a race: a member being removed could re-add themselves. Commit 18 fixes it by taking
+  the write lock before the checks, and its race tests fail when the lock is weakened.
+  Commit 19 aligns the error codes for adding and removing members.
 - **Checking.** The walkthrough above was run against the live server, and the tests were run
   from a fresh clone, before committing.
 - **Timing.** The agent writes code fast: commits 2–11 span about 12 minutes. Most of the time
