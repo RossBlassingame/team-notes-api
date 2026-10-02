@@ -87,7 +87,7 @@ def create_note(payload: NoteCreate, user: CurrentUser, conn: Conn, response: Re
             " VALUES (:owner_id, :title, :body, :ts, :ts)",
             {"owner_id": user.id, "title": payload.title, "body": payload.body, "ts": timestamp},
         )
-    note = fetch_note(conn, cursor.lastrowid, user.id)
+        note = fetch_note(conn, cursor.lastrowid, user.id)
     response.headers["Location"] = f"/notes/{note.id}"
     response.headers["ETag"] = etag(note.version)
     return note
@@ -157,10 +157,12 @@ def update_note(
                 "me": user.id,
             },
         )
-    if cursor.rowcount == 0:
-        fetch_note(conn, note_id, user.id)  # 404 if it was deleted or unshared meanwhile
-        raise stale_note()
-    note = fetch_note(conn, note_id, user.id)
+        if cursor.rowcount == 0:
+            fetch_note(conn, note_id, user.id)  # 404 if it was deleted or unshared meanwhile
+            raise stale_note()
+        # Read back before committing: we hold SQLite's write lock until then, so this is
+        # exactly the version we wrote, not a later edit that slipped in.
+        note = fetch_note(conn, note_id, user.id)
     response.headers["ETag"] = etag(note.version)
     return note
 
@@ -183,14 +185,18 @@ def share_note(
     require_owner(fetch_note(conn, note_id, user.id), user)
     if not is_member(conn, team_id, user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
-    with conn:
-        # Sharing changes who can see the note, not its content, so the version (and
-        # ETag) stays put and nobody's in-progress edit is invalidated.
-        cursor = conn.execute(
-            "INSERT OR IGNORE INTO note_shares (note_id, team_id, shared_at)"
-            " VALUES (:note_id, :team_id, :ts)",
-            {"note_id": note_id, "team_id": team_id, "ts": now()},
-        )
+    try:
+        with conn:
+            # Sharing changes who can see the note, not its content, so the version (and
+            # ETag) stays put and nobody's in-progress edit is invalidated.
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO note_shares (note_id, team_id, shared_at)"
+                " VALUES (:note_id, :team_id, :ts)",
+                {"note_id": note_id, "team_id": team_id, "ts": now()},
+            )
+    except sqlite3.IntegrityError:
+        # The note was deleted after we checked it (OR IGNORE doesn't cover FK failures).
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found") from None
     if cursor.rowcount:
         response.status_code = status.HTTP_201_CREATED
 
