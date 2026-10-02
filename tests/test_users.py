@@ -19,7 +19,9 @@ def test_duplicate_username_is_rejected_case_insensitively(client, alice):
     assert response.status_code == 409
 
 
-@pytest.mark.parametrize("username", ["", "has space", "x" * 33, "semi;colon"])
+@pytest.mark.parametrize(
+    "username", ["", "has space", "x" * 33, "semi;colon", ".", "..", "-leading-dash"]
+)
 def test_invalid_username_is_rejected(client, username):
     response = client.post("/users", json={"username": username})
     assert response.status_code == 422

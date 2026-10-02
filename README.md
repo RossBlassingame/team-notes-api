@@ -20,7 +20,7 @@ to reset.
 ## Tests
 
 ```bash
-uv run pytest                                          # 125 tests, a few seconds
+uv run pytest                                          # 144 tests, a few seconds
 uv run ruff check . && uv run ruff format --check .
 ```
 
@@ -71,6 +71,7 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 | `POST /teams` `{name}` | Create a team; the creator becomes a member |
 | `GET /teams` | Teams you belong to |
 | `POST /teams/{id}/members` `{username}` | Add someone to a team you're in (idempotent) |
+| `DELETE /teams/{id}/members/{username}` | Remove a member, or yourself to leave. Their access ends immediately. The last member can't leave (`409`). |
 | `POST /notes` `{title, body?}` | Create a private note → `201`, `Location`, `ETag` |
 | `GET /notes?q=&limit=&offset=` | Notes you can read, most recently updated first. `q` searches title and body. |
 | `GET /notes/{id}` | One note, plus its `ETag` |
@@ -92,8 +93,8 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 ### 1. Sharing and authorization model
 
 Notes start private. The owner can share a note with any number of teams they belong to.
-Access is computed from team membership at query time and never copied, so it always reflects
-current membership.
+Access is computed from team membership at query time and never copied, so removing someone
+from a team cuts off their access on their very next request.
 
 The most important property is that **one SQL predicate decides visibility**
 ([`app/policy.py`](app/policy.py)). It is ANDed into every note query: list, search, fetch,
@@ -146,9 +147,9 @@ Alternatives I considered:
 
 ## Known limitations
 
-- **Access can't be revoked.** There's no way to remove a team member or delete a team. Any
-  member can add anyone, and the person added can then edit every note shared with the team.
-  This is the first thing I'd fix.
+- **Team membership is flat.** Any member can add or remove anyone, and there are no team
+  admins. Leaving a team doesn't unshare the notes you shared with it; you can still unshare
+  them afterwards. Teams can't be deleted.
 - **Open registration.** Anyone can create a user.
 - **Search is basic.** It's a substring `LIKE`: a full scan, with case-insensitive matching for
   ASCII only.
@@ -166,7 +167,7 @@ Alternatives I considered:
   - OIDC/JWT from a real identity provider, instead of local tokens.
   - Keyset (cursor) pagination.
 - **Add:**
-  - Team roles, plus removing members and leaving teams.
+  - Team roles, so that only admins control membership.
   - A team-detail endpoint listing members.
   - Note history, so a `412` can offer a merge.
   - Full-text search.
@@ -217,6 +218,7 @@ After a separate review of the code, these commits followed:
 14. `fix: make error responses consistent`
 15. `test: cover parallel saves, unsharing from lists, and shared-note search`
 16. `docs: correct README claims found in code review`
+17. `feat(teams): let members remove members and leave teams`
 
 ## How I used AI
 
@@ -230,7 +232,8 @@ I built this with Claude Code, an AI coding agent:
 - **Reviewing.** After the build, a fresh AI reviewer audited the code with reproduction
   scripts. Commits 12–16 fix what it found: several malformed inputs that returned 500s, a race
   in the read-back after an edit, inconsistent error shapes, and inaccurate claims in this
-  README.
+  README. Commit 17 closes the biggest gap it flagged: without a way to remove someone from a
+  team, access could never be revoked.
 - **Checking.** The walkthrough above was run against the live server, and the tests were run
   from a fresh clone, before committing.
 - **Timing.** The agent writes code fast: commits 2–11 span about 12 minutes. Most of the time

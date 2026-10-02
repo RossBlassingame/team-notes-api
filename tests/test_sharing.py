@@ -191,3 +191,44 @@ def test_team_members_can_search_shared_notes(client, users, teams, note):
 
     assert found(users["bob"]) == [note["id"]]
     assert found(users["carol"]) == []
+
+
+def remove_member(client, user, team_id, username):
+    return client.delete(f"/teams/{team_id}/members/{username}", headers=user.headers)
+
+
+def test_removed_member_loses_access_immediately(client, users, teams, note):
+    alice, bob = users["alice"], users["bob"]
+    share(client, alice, note, teams["platform"])
+    assert get(client, bob, note).status_code == 200
+
+    assert remove_member(client, alice, teams["platform"], "bob").status_code == 204
+
+    assert get(client, bob, note).status_code == 404
+    assert edit(client, bob, note).status_code == 404
+    assert client.get("/notes", headers=bob.headers).json()["items"] == []
+
+
+def test_re_added_member_regains_access(client, users, teams, note):
+    alice, bob = users["alice"], users["bob"]
+    share(client, alice, note, teams["platform"])
+    remove_member(client, alice, teams["platform"], "bob")
+
+    client.post(
+        f"/teams/{teams['platform']}/members", json={"username": "bob"}, headers=alice.headers
+    )
+
+    assert get(client, bob, note).status_code == 200
+
+
+def test_leaving_keeps_your_shared_notes_shared_until_you_unshare(client, users, teams):
+    alice, bob = users["alice"], users["bob"]
+    bobs_note = client.post("/notes", json={"title": "Bob's"}, headers=bob.headers).json()
+    share(client, bob, bobs_note, teams["platform"])
+
+    remove_member(client, bob, teams["platform"], "bob")
+
+    assert get(client, alice, bobs_note).status_code == 200  # still visible to the team
+    assert share(client, bob, bobs_note, teams["platform"]).status_code == 404  # can't re-share
+    assert unshare(client, bob, bobs_note, teams["platform"]).status_code == 204  # can unshare
+    assert get(client, alice, bobs_note).status_code == 404

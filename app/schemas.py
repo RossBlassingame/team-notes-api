@@ -8,7 +8,11 @@ MAX_INT = 2**63 - 1
 RowId = Annotated[int, Path(ge=1, le=MAX_INT)]
 
 
-Username = Annotated[str, Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")]
+# Must start with a letter or digit, so a username is always a safe URL path segment
+# (no "." or "..").
+USERNAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+Username = Annotated[str, Field(min_length=1, max_length=32, pattern=USERNAME_PATTERN)]
+UsernamePath = Annotated[str, Path(min_length=1, max_length=32, pattern=USERNAME_PATTERN)]
 
 
 class Input(BaseModel):

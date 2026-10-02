@@ -1,3 +1,6 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 
@@ -79,3 +82,80 @@ def test_non_member_cannot_add_members(client, alice, bob):
 @pytest.mark.parametrize("name", ["", "   ", "x" * 101])
 def test_invalid_team_name_is_rejected(client, alice, name):
     assert client.post("/teams", json={"name": name}, headers=alice.headers).status_code == 422
+
+
+def add_member(client, user, team, username):
+    return client.post(
+        f"/teams/{team['id']}/members", json={"username": username}, headers=user.headers
+    )
+
+
+def remove_member(client, user, team, username):
+    return client.delete(f"/teams/{team['id']}/members/{username}", headers=user.headers)
+
+
+def test_member_can_remove_another_member(client, alice, bob, make_user):
+    carol = make_user("carol")
+    team = create_team(client, alice)
+    add_member(client, alice, team, "bob")
+    add_member(client, alice, team, "carol")
+
+    assert remove_member(client, bob, team, "Carol").status_code == 204  # case-insensitive
+
+    assert team_names(client, carol) == []
+    assert team_names(client, bob) == ["Platform"]
+
+
+def test_member_can_leave(client, alice, bob):
+    team = create_team(client, alice)
+    add_member(client, alice, team, "bob")
+
+    assert remove_member(client, bob, team, "bob").status_code == 204
+
+    assert team_names(client, bob) == []
+    assert add_member(client, bob, team, "bob").status_code == 404  # no longer a member
+
+
+def test_last_member_cannot_leave(client, alice):
+    team = create_team(client, alice)
+
+    response = remove_member(client, alice, team, "alice")
+
+    assert response.status_code == 409
+    assert team_names(client, alice) == ["Platform"]
+
+
+@pytest.mark.parametrize("username", ["bob", "nobody"])
+def test_removing_someone_who_is_not_a_member_is_204(client, alice, bob, username):
+    team = create_team(client, alice)
+    assert remove_member(client, alice, team, username).status_code == 204
+
+
+def test_non_member_cannot_remove_members(client, alice, bob):
+    team = create_team(client, alice)
+
+    assert remove_member(client, bob, team, "alice").status_code == 404
+    assert remove_member(client, bob, {"id": 999}, "alice").status_code == 404
+    assert team_names(client, alice) == ["Platform"]
+
+
+@pytest.mark.parametrize("username", ["-x", "x" * 33, "a b"])
+def test_invalid_username_in_path_is_422(client, alice, username):
+    team = create_team(client, alice)
+    assert remove_member(client, alice, team, username).status_code == 422
+
+
+def test_simultaneous_leaves_cannot_empty_a_team(client, alice, bob):
+    team = create_team(client, alice)
+    add_member(client, alice, team, "bob")
+    barrier = threading.Barrier(2)
+
+    def leave(user):
+        barrier.wait()
+        return remove_member(client, user, team, user.username).status_code
+
+    with ThreadPoolExecutor(2) as pool:
+        statuses = sorted(pool.map(leave, [alice, bob]))
+
+    assert statuses == [204, 409]
+    assert len(team_names(client, alice) + team_names(client, bob)) == 1

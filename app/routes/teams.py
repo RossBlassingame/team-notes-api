@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from app.auth import CurrentUser
 from app.db import Conn, now
 from app.policy import is_member
-from app.schemas import MemberAdd, RowId, TeamCreate, TeamList, TeamOut
+from app.schemas import MemberAdd, RowId, TeamCreate, TeamList, TeamOut, UsernamePath
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -58,3 +58,36 @@ def add_member(team_id: RowId, payload: MemberAdd, user: CurrentUser, conn: Conn
             " VALUES (:team_id, :user_id, :ts)",
             {"team_id": team_id, "user_id": member["id"], "ts": now()},
         )
+
+
+@router.delete("/{team_id}/members/{username}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_member(team_id: RowId, username: UsernamePath, user: CurrentUser, conn: Conn) -> None:
+    """Remove a member, or yourself to leave. Their access to the team's notes ends at once.
+
+    Membership is flat: any member can add or remove anyone. Notes the removed member owns
+    stay shared with the team until they unshare them.
+    """
+    if not is_member(conn, team_id, user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
+    params = {"team_id": team_id, "username": username}
+    with conn:
+        # One statement, so two members leaving at once can't empty the team.
+        cursor = conn.execute(
+            """
+            DELETE FROM team_members
+            WHERE team_id = :team_id
+              AND user_id = (SELECT id FROM users WHERE username = :username)
+              AND (SELECT COUNT(*) FROM team_members WHERE team_id = :team_id) > 1
+            """,
+            params,
+        )
+    if cursor.rowcount == 0:
+        still_member = conn.execute(
+            "SELECT 1 FROM team_members m JOIN users u ON u.id = m.user_id"
+            " WHERE m.team_id = :team_id AND u.username = :username",
+            params,
+        ).fetchone()
+        if still_member:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "A team needs at least one member; it can't be left empty"
+            )
