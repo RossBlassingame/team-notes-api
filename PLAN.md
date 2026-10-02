@@ -2,6 +2,8 @@
 
 A two-hour take-home: a REST backend for notes that several small teams use and share. This file records the decisions made before any code was written. The README holds the final write-up.
 
+> **Note:** this file is kept as originally written, so parts are out of date. In particular, member removal was added after code review, and writes now use `BEGIN IMMEDIATE`. The README and the code describe the current behaviour.
+
 ## Scope
 
 **In scope:**

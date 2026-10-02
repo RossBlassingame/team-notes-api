@@ -11,7 +11,7 @@ def users(make_user):
 
 @pytest.fixture
 def teams(client, users):
-    """Alice owns both teams; bob is on `platform`, carol on `design`, dave on neither."""
+    """Alice created both teams; bob is on `platform`, carol on `design`, dave on neither."""
     alice = users["alice"]
     created = {}
     for name, member in [("platform", "bob"), ("design", "carol")]:

@@ -72,7 +72,7 @@ def add_member(team_id: RowId, payload: MemberAdd, user: CurrentUser, conn: Conn
 
 @router.delete("/{team_id}/members/{username}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_member(team_id: RowId, username: UsernamePath, user: CurrentUser, conn: Conn) -> None:
-    """Remove a member, or yourself to leave. Their access to the team's notes ends at once.
+    """Remove a member, or yourself to leave. Their access through this team ends at once.
 
     Membership is flat: any member can add or remove anyone. Notes the removed member owns
     stay shared with the team until they unshare them.

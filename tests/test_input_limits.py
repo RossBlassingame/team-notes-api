@@ -51,7 +51,7 @@ def test_text_that_is_not_valid_utf8_is_422(client, alice, path, raw_json):
     assert client.post(path, content=raw_json, headers=headers).status_code == 422
 
 
-def test_validation_errors_do_not_echo_the_input(client, alice):
+def test_validation_errors_do_not_echo_input_values(client, alice):
     response = client.post("/notes", json={"title": "x" * 5000}, headers=alice.headers)
 
     assert response.status_code == 422

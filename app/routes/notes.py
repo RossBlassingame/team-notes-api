@@ -73,7 +73,7 @@ def fetch_note(conn: sqlite3.Connection, note_id: int, user_id: int) -> NoteOut:
         f"{SELECT_NOTE} WHERE n.id = :id AND {CAN_READ}", {"id": note_id, "me": user_id}
     ).fetchone()
     if row is None:
-        # Same answer for "doesn't exist" and "not yours", so ids leak nothing.
+        # Same answer for "doesn't exist" and "not yours", so status codes leak nothing.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
     return to_note(row)
 
@@ -98,7 +98,8 @@ def list_notes(
     user: CurrentUser,
     conn: Conn,
     q: Annotated[
-        str | None, Query(max_length=200, description="Case-insensitive text in title or body")
+        str | None,
+        Query(max_length=200, description="Case-insensitive (ASCII only) text in title or body"),
     ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0, le=MAX_INT)] = 0,
@@ -134,7 +135,7 @@ def update_note(
     if_match: Annotated[str | None, Header()] = None,
 ) -> NoteOut:
     with write_transaction(conn):
-        # Order matters: a note you can't read is 404 whatever you send, so 428/412 never
+        # Order matters: a note you can't read is 404 whatever If-Match you send, so 428/412 never
         # confirm that it exists.
         fetch_note(conn, note_id, user.id)
         version = expected_version(if_match)

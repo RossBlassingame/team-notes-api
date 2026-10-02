@@ -14,8 +14,8 @@ uv run fastapi dev        # http://127.0.0.1:8000/docs
 
 The interactive docs at `/docs` let you call every endpoint. Create a user with `POST /users`,
 then click **Authorize** and paste the token it returns.
-Data is stored in `./notes.db`; set `NOTES_DB_PATH` to use a different file, or delete the file
-to reset.
+Data is stored in `./notes.db`; set `NOTES_DB_PATH` to use a different file, or stop the server and
+delete the file to reset.
 
 ## Tests
 
@@ -66,12 +66,13 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 
 | Endpoint | Purpose |
 |---|---|
+| `GET /health` | Liveness check, no auth |
 | `POST /users` `{username}` | Register. Returns the token once. |
 | `GET /users/me` | The caller's user record |
 | `POST /teams` `{name}` | Create a team; the creator becomes a member |
 | `GET /teams` | Teams you belong to |
 | `POST /teams/{id}/members` `{username}` | Add someone to a team you're in (idempotent) |
-| `DELETE /teams/{id}/members/{username}` | Remove a member, or yourself to leave. Their access ends immediately. The last member can't leave (`409`), and an unknown username gets `422`. |
+| `DELETE /teams/{id}/members/{username}` | Remove a member, or yourself to leave. Their access through that team ends immediately. The last member can't leave (`409`), and an unknown username gets `422`. |
 | `POST /notes` `{title, body?}` | Create a private note → `201`, `Location`, `ETag` |
 | `GET /notes?q=&limit=&offset=` | Notes you can read, most recently updated first. `q` searches title and body. |
 | `GET /notes/{id}` | One note, plus its `ETag` |
@@ -94,18 +95,20 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 
 Notes start private. The owner can share a note with any number of teams they belong to.
 Access is computed from team membership at query time and never copied, so removing someone
-from a team cuts off their access on their very next request. Every write runs under SQLite's
-write lock (`BEGIN IMMEDIATE`), taken before the checks that guard it. So a member being removed
+from a team cuts off their access through that team on their very next request. Every write a
+request makes runs under SQLite's write lock (`BEGIN IMMEDIATE`), taken before the checks that guard it. So a member being removed
 can't slip a write through between "are you a member?" and the write itself.
 
 The most important property is that **one SQL predicate decides visibility**
-([`app/policy.py`](app/policy.py)). It is ANDed into every note query: list, search, fetch,
-update. A common authorization bug in APIs like this is a list or search endpoint that filters
+([`app/policy.py`](app/policy.py)). It is ANDed into every note read and the content update (list,
+search, fetch, update); owner-only writes look the note up through it first. A common authorization bug in APIs like this is a list or search endpoint that filters
 differently from the detail endpoint. With a single predicate, that can't happen.
 
 Status codes:
-- `404` for anything you can't read, so ids reveal nothing about other people's notes.
-- `403` only for notes you can already see but may not change (delete, share).
+- `404` for anything you can't read, so status codes don't reveal whether a note you can't
+  read exists.
+- `403` only for notes you can already see but whose owner-only actions you can't take
+  (delete, share, unshare).
 
 Sharing is a sub-resource, `PUT/DELETE /notes/{id}/shares/{team_id}`, rather than a PATCH
 field. Content edits (any reader) and access changes (owner only) have different rules, so
@@ -128,7 +131,7 @@ Last-write-wins would silently throw away someone's work.
   concurrent saves can't both succeed.
 - Making the header required, not optional, means a client can't skip the check by accident.
 - Sharing doesn't change the version. It changes who sees the note, not its content, so it
-  never invalidates someone's in-progress edit.
+  never makes an in-progress edit's ETag stale.
 
 Alternatives I considered:
 - Last-write-wins: silently loses edits.
@@ -195,12 +198,13 @@ app/
   policy.py     who can see a note (one SQL predicate) and team membership
   schemas.py    request and response models and validation
   routes/       users, teams, notes
-tests/          one file per feature, plus an auth test generated from every route
+tests/          one file per feature, plus an auth test generated from every protected route
 ```
 
 ## Commit history
 
-Each commit is one vertical slice with its own tests, and lint and tests pass at every commit.
+Each feature and fix commit is a vertical slice with its own tests, and lint and tests pass at
+every commit.
 
 1. `docs: add design plan`
 2. `chore: scaffold FastAPI service with health check and tooling`
@@ -225,6 +229,7 @@ After a separate review of the code, these commits followed:
 18. `fix: take the write lock before checks that guard a write`
 19. `fix(teams): reject unknown usernames when removing members`
 20. `docs: update README for member removal and its review`
+21. `docs: correct overstated claims in README and comments`
 
 ## How I used AI
 
@@ -246,5 +251,5 @@ I built this with Claude Code, an AI coding agent:
   Commit 19 aligns the error codes for adding and removing members.
 - **Checking.** The walkthrough above was run against the live server, and the tests were run
   from a fresh clone, before committing.
-- **Timing.** The agent writes code fast: commits 2–11 span about 12 minutes. Most of the time
+- **Timing.** The agent writes code fast: commits 2–11 span about 10 minutes. Most of the time
   went into the plan, its review rounds, and the code review.
