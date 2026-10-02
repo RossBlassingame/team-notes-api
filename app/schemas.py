@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 Username = Annotated[str, Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")]
 
@@ -32,6 +32,22 @@ Body = Annotated[str, Field(max_length=100_000)]
 class NoteCreate(Input):
     title: Title
     body: Body = ""
+
+
+class NoteUpdate(Input):
+    """Partial update: send only the fields to change. `null` is not a valid value."""
+
+    title: Title | None = None
+    body: Body | None = None
+
+    @model_validator(mode="after")
+    def require_non_null_changes(self) -> "NoteUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Provide at least one of: title, body")
+        for field in self.model_fields_set:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
 
 
 class NoteOut(BaseModel):

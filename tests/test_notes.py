@@ -70,3 +70,65 @@ def test_list_returns_own_notes_newest_first(client, alice, bob):
 def test_invalid_note_is_rejected(client, alice, payload):
     response = client.post("/notes", json=payload, headers=alice.headers)
     assert response.status_code == 422
+
+
+def test_update_title_only(client, alice):
+    created = create_note(client, alice, body="eggs").json()
+
+    response = client.patch(
+        f"/notes/{created['id']}", json={"title": "Shopping"}, headers=alice.headers
+    )
+
+    assert response.status_code == 200
+    note = response.json()
+    assert (note["title"], note["body"]) == ("Shopping", "eggs")
+    assert note["version"] == 2
+    assert note["updated_at"] > created["updated_at"]
+    assert response.headers["ETag"] == '"2"'
+
+
+def test_update_body_only(client, alice):
+    created = create_note(client, alice).json()
+
+    response = client.patch(f"/notes/{created['id']}", json={"body": "milk"}, headers=alice.headers)
+
+    assert (response.json()["title"], response.json()["body"]) == ("Groceries", "milk")
+
+
+def test_edited_note_moves_to_top_of_list(client, alice):
+    first = create_note(client, alice, title="first").json()
+    create_note(client, alice, title="second")
+
+    client.patch(f"/notes/{first['id']}", json={"body": "edited"}, headers=alice.headers)
+
+    items = client.get("/notes", headers=alice.headers).json()["items"]
+    assert [note["title"] for note in items] == ["first", "second"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"title": None}, {"body": None}, {"title": ""}, {"version": 5}],
+    ids=["empty", "null-title", "null-body", "empty-title", "unknown-field"],
+)
+def test_invalid_update_is_rejected(client, alice, payload):
+    note_id = create_note(client, alice).json()["id"]
+
+    response = client.patch(f"/notes/{note_id}", json=payload, headers=alice.headers)
+
+    assert response.status_code == 422
+
+
+def test_delete_note(client, alice):
+    location = create_note(client, alice).headers["Location"]
+
+    assert client.delete(location, headers=alice.headers).status_code == 204
+    assert client.get(location, headers=alice.headers).status_code == 404
+    assert client.delete(location, headers=alice.headers).status_code == 404
+
+
+def test_other_users_cannot_update_or_delete(client, alice, bob):
+    location = create_note(client, alice).headers["Location"]
+
+    assert client.patch(location, json={"title": "mine"}, headers=bob.headers).status_code == 404
+    assert client.delete(location, headers=bob.headers).status_code == 404
+    assert client.get(location, headers=alice.headers).json()["title"] == "Groceries"

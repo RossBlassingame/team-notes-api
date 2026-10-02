@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from app.auth import CurrentUser
 from app.db import Conn, now
 from app.policy import CAN_READ
-from app.schemas import NoteCreate, NoteList, NoteOut
+from app.schemas import NoteCreate, NoteList, NoteOut, NoteUpdate
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -58,3 +58,39 @@ def get_note(note_id: int, user: CurrentUser, conn: Conn, response: Response) ->
     note = fetch_note(conn, note_id, user.id)
     response.headers["ETag"] = etag(note.version)
     return note
+
+
+@router.patch("/{note_id}")
+def update_note(
+    note_id: int, payload: NoteUpdate, user: CurrentUser, conn: Conn, response: Response
+) -> NoteOut:
+    with conn:
+        cursor = conn.execute(
+            f"""
+            UPDATE notes AS n
+            SET title = COALESCE(:title, title),
+                body = COALESCE(:body, body),
+                version = version + 1,
+                updated_at = :ts
+            WHERE n.id = :id AND {CAN_READ}
+            """,
+            {
+                "title": payload.title,
+                "body": payload.body,
+                "ts": now(),
+                "id": note_id,
+                "me": user.id,
+            },
+        )
+    if cursor.rowcount == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
+    note = fetch_note(conn, note_id, user.id)
+    response.headers["ETag"] = etag(note.version)
+    return note
+
+
+@router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_note(note_id: int, user: CurrentUser, conn: Conn) -> None:
+    fetch_note(conn, note_id, user.id)
+    with conn:
+        conn.execute("DELETE FROM notes WHERE id = :id", {"id": note_id})
