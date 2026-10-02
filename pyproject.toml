@@ -1,0 +1,27 @@
+[project]
+name = "team-notes-api"
+version = "0.1.0"
+description = "REST backend for notes shared across small teams"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["fastapi[standard]>=0.142"]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.fastapi]
+entrypoint = "app.main:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
