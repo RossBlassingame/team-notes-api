@@ -125,10 +125,20 @@ def test_last_member_cannot_leave(client, alice):
     assert team_names(client, alice) == ["Platform"]
 
 
-@pytest.mark.parametrize("username", ["bob", "nobody"])
-def test_removing_someone_who_is_not_a_member_is_204(client, alice, bob, username):
+def test_removing_someone_who_is_not_a_member_is_204(client, alice, bob):
     team = create_team(client, alice)
-    assert remove_member(client, alice, team, username).status_code == 204
+    assert remove_member(client, alice, team, "bob").status_code == 204
+
+
+def test_removing_an_unknown_username_is_422(client, alice):
+    team = create_team(client, alice)
+
+    response = remove_member(client, alice, team, "nobody")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {"type": "value_error", "loc": ["path", "username"], "msg": "No such user"}
+    ]
 
 
 def test_non_member_cannot_remove_members(client, alice, bob):

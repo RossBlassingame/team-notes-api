@@ -14,11 +14,16 @@ def require_member(conn, team_id: int, user_id: int) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
 
 
-def find_user_id(conn, username: str) -> int | None:
+def find_user_id(conn, username: str, source: str) -> int:
     row = conn.execute(
         "SELECT id FROM users WHERE username = :username", {"username": username}
     ).fetchone()
-    return None if row is None else row["id"]
+    if row is None:
+        # Same shape as FastAPI's own 422s, so clients parse one error format.
+        raise RequestValidationError(
+            [{"type": "value_error", "loc": (source, "username"), "msg": "No such user"}]
+        )
+    return row["id"]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -57,12 +62,7 @@ def add_member(team_id: RowId, payload: MemberAdd, user: CurrentUser, conn: Conn
     with write_transaction(conn):
         # Checked under the write lock: someone removed mid-request can't re-add anyone.
         require_member(conn, team_id, user.id)
-        member_id = find_user_id(conn, payload.username)
-        if member_id is None:
-            # Same shape as FastAPI's own 422s, so clients parse one error format.
-            raise RequestValidationError(
-                [{"type": "value_error", "loc": ("body", "username"), "msg": "No such user"}]
-            )
+        member_id = find_user_id(conn, payload.username, source="body")
         conn.execute(
             "INSERT OR IGNORE INTO team_members (team_id, user_id, added_at)"
             " VALUES (:team_id, :user_id, :ts)",
@@ -79,9 +79,9 @@ def remove_member(team_id: RowId, username: UsernamePath, user: CurrentUser, con
     """
     with write_transaction(conn):
         require_member(conn, team_id, user.id)
-        member_id = find_user_id(conn, username)
-        if member_id is None or not is_member(conn, team_id, member_id):
-            return
+        member_id = find_user_id(conn, username, source="path")
+        if not is_member(conn, team_id, member_id):
+            return  # already not a member: removal is idempotent
         member_count = conn.execute(
             "SELECT COUNT(*) FROM team_members WHERE team_id = :team_id", {"team_id": team_id}
         ).fetchone()[0]
