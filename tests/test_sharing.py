@@ -165,23 +165,6 @@ def test_deleting_a_note_removes_its_shares(client, users, teams, note):
     assert remaining == (0,)
 
 
-def test_sharing_a_note_deleted_mid_request_is_404(client, users, teams, note, monkeypatch):
-    from app.routes import notes as notes_routes
-
-    real_is_member = notes_routes.is_member
-
-    def delete_note_then_check(conn, team_id, user_id):
-        # Simulate the owner deleting the note from another request after it was fetched.
-        with closing(sqlite3.connect(client.app.state.db_path)) as other:
-            other.execute("DELETE FROM notes WHERE id = ?", (note["id"],))
-            other.commit()
-        return real_is_member(conn, team_id, user_id)
-
-    monkeypatch.setattr(notes_routes, "is_member", delete_note_then_check)
-
-    assert share(client, users["alice"], note, teams["platform"]).status_code == 404
-
-
 def test_team_members_can_search_shared_notes(client, users, teams, note):
     share(client, users["alice"], note, teams["platform"])
 

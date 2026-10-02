@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 
 from app.auth import CurrentUser, User
-from app.db import Conn, now
+from app.db import Conn, now, write_transaction
 from app.policy import CAN_READ, is_member
 from app.schemas import MAX_INT, NoteCreate, NoteList, NoteOut, NoteUpdate, RowId
 
@@ -81,7 +81,7 @@ def fetch_note(conn: sqlite3.Connection, note_id: int, user_id: int) -> NoteOut:
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_note(payload: NoteCreate, user: CurrentUser, conn: Conn, response: Response) -> NoteOut:
     timestamp = now()
-    with conn:
+    with write_transaction(conn):
         cursor = conn.execute(
             "INSERT INTO notes (owner_id, title, body, created_at, updated_at)"
             " VALUES (:owner_id, :title, :body, :ts, :ts)",
@@ -133,12 +133,13 @@ def update_note(
     response: Response,
     if_match: Annotated[str | None, Header()] = None,
 ) -> NoteOut:
-    # Order matters: a note you can't read is 404 whatever you send, so 428/412 never
-    # confirm that it exists.
-    fetch_note(conn, note_id, user.id)
-    version = expected_version(if_match)
-    with conn:
-        # Check and write in one statement, so two concurrent edits can't both succeed.
+    with write_transaction(conn):
+        # Order matters: a note you can't read is 404 whatever you send, so 428/412 never
+        # confirm that it exists.
+        fetch_note(conn, note_id, user.id)
+        version = expected_version(if_match)
+        # The version check is part of the UPDATE itself: two saves of the same version
+        # can't both succeed.
         cursor = conn.execute(
             f"""
             UPDATE notes AS n
@@ -158,19 +159,16 @@ def update_note(
             },
         )
         if cursor.rowcount == 0:
-            fetch_note(conn, note_id, user.id)  # 404 if it was deleted or unshared meanwhile
             raise stale_note()
-        # Read back before committing: we hold SQLite's write lock until then, so this is
-        # exactly the version we wrote, not a later edit that slipped in.
-        note = fetch_note(conn, note_id, user.id)
+        note = fetch_note(conn, note_id, user.id)  # exactly the version we just wrote
     response.headers["ETag"] = etag(note.version)
     return note
 
 
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_note(note_id: RowId, user: CurrentUser, conn: Conn) -> None:
-    require_owner(fetch_note(conn, note_id, user.id), user)
-    with conn:
+    with write_transaction(conn):
+        require_owner(fetch_note(conn, note_id, user.id), user)
         conn.execute("DELETE FROM notes WHERE id = :id", {"id": note_id})  # shares cascade
 
 
@@ -180,29 +178,25 @@ def delete_note(note_id: RowId, user: CurrentUser, conn: Conn) -> None:
     responses={201: {"description": "Shared"}, 204: {"description": "Already shared"}},
 )
 def share_note(note_id: RowId, team_id: RowId, user: CurrentUser, conn: Conn) -> Response:
-    require_owner(fetch_note(conn, note_id, user.id), user)
-    if not is_member(conn, team_id, user.id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
-    try:
-        with conn:
-            # Sharing changes who can see the note, not its content, so the version (and
-            # ETag) stays put and nobody's in-progress edit is invalidated.
-            cursor = conn.execute(
-                "INSERT OR IGNORE INTO note_shares (note_id, team_id, shared_at)"
-                " VALUES (:note_id, :team_id, :ts)",
-                {"note_id": note_id, "team_id": team_id, "ts": now()},
-            )
-    except sqlite3.IntegrityError:
-        # The note was deleted after we checked it (OR IGNORE doesn't cover FK failures).
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found") from None
+    with write_transaction(conn):
+        require_owner(fetch_note(conn, note_id, user.id), user)
+        if not is_member(conn, team_id, user.id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
+        # Sharing changes who can see the note, not its content, so the version (and ETag)
+        # stays put and nobody's in-progress edit is invalidated.
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO note_shares (note_id, team_id, shared_at)"
+            " VALUES (:note_id, :team_id, :ts)",
+            {"note_id": note_id, "team_id": team_id, "ts": now()},
+        )
     created = cursor.rowcount == 1
     return Response(status_code=status.HTTP_201_CREATED if created else status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/{note_id}/shares/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
 def unshare_note(note_id: RowId, team_id: RowId, user: CurrentUser, conn: Conn) -> None:
-    require_owner(fetch_note(conn, note_id, user.id), user)
-    with conn:
+    with write_transaction(conn):
+        require_owner(fetch_note(conn, note_id, user.id), user)
         conn.execute(
             "DELETE FROM note_shares WHERE note_id = :note_id AND team_id = :team_id",
             {"note_id": note_id, "team_id": team_id},

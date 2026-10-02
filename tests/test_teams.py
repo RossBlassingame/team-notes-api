@@ -145,17 +145,40 @@ def test_invalid_username_in_path_is_422(client, alice, username):
     assert remove_member(client, alice, team, username).status_code == 422
 
 
-def test_simultaneous_leaves_cannot_empty_a_team(client, alice, bob):
+def race(*calls):
+    """Start all calls at the same instant on separate threads; return their results."""
+    barrier = threading.Barrier(len(calls))
+
+    def run(call):
+        barrier.wait()
+        return call()
+
+    with ThreadPoolExecutor(len(calls)) as pool:
+        return list(pool.map(run, calls))
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_simultaneous_leaves_cannot_empty_a_team(client, make_user, attempt):
+    members = [make_user(f"user{i}") for i in range(8)]
+    team = create_team(client, members[0])
+    for member in members[1:]:
+        add_member(client, members[0], team, member.username)
+
+    statuses = race(*[lambda m=m: remove_member(client, m, team, m.username) for m in members])
+
+    assert sorted(r.status_code for r in statuses) == [204] * 7 + [409]
+    assert sum(len(team_names(client, m)) for m in members) == 1
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_removed_member_cannot_re_add_themselves_mid_removal(client, alice, bob, attempt):
     team = create_team(client, alice)
     add_member(client, alice, team, "bob")
-    barrier = threading.Barrier(2)
 
-    def leave(user):
-        barrier.wait()
-        return remove_member(client, user, team, user.username).status_code
+    race(
+        lambda: remove_member(client, alice, team, "bob"),
+        *[lambda: add_member(client, bob, team, "bob") for _ in range(7)],
+    )
 
-    with ThreadPoolExecutor(2) as pool:
-        statuses = sorted(pool.map(leave, [alice, bob]))
-
-    assert statuses == [204, 409]
-    assert len(team_names(client, alice) + team_names(client, bob)) == 1
+    # Bob's adds either landed before the removal (then it removed him) or were refused.
+    assert team_names(client, bob) == []

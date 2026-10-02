@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -30,7 +31,7 @@ def init_schema(db_path: str) -> None:
 
 def get_conn(request: Request) -> Iterator[sqlite3.Connection]:
     # Only closes. FastAPI runs code after `yield` once the response has been sent, so
-    # committing here could fail silently. Writes commit in `with conn:` blocks instead.
+    # committing here could fail silently. Writes commit in `write_transaction` instead.
     conn = connect(request.app.state.db_path)
     try:
         yield conn
@@ -39,6 +40,23 @@ def get_conn(request: Request) -> Iterator[sqlite3.Connection]:
 
 
 Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
+
+
+@contextmanager
+def write_transaction(conn: sqlite3.Connection) -> Iterator[None]:
+    """Run the checks a write depends on, and the write, as one atomic unit.
+
+    BEGIN IMMEDIATE takes SQLite's write lock up front, so no other request can commit
+    between our checks ("is the caller a member?") and our write. `with conn:` alone
+    would only take the lock at the first write, leaving that gap open.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
 
 
 def now() -> str:

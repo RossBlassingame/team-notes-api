@@ -3,7 +3,7 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, status
 
 from app.auth import CurrentUser, hash_token, new_token
-from app.db import Conn, now
+from app.db import Conn, now, write_transaction
 from app.schemas import UserCreate, UserCreated, UserOut
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -14,7 +14,7 @@ def register(payload: UserCreate, conn: Conn) -> UserCreated:
     token = new_token()
     created_at = now()
     try:
-        with conn:
+        with write_transaction(conn):
             cursor = conn.execute(
                 "INSERT INTO users (username, token_hash, created_at)"
                 " VALUES (:username, :token_hash, :created_at)",

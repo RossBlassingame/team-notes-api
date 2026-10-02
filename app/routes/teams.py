@@ -2,17 +2,29 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.exceptions import RequestValidationError
 
 from app.auth import CurrentUser
-from app.db import Conn, now
+from app.db import Conn, now, write_transaction
 from app.policy import is_member
 from app.schemas import MemberAdd, RowId, TeamCreate, TeamList, TeamOut, UsernamePath
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
 
+def require_member(conn, team_id: int, user_id: int) -> None:
+    if not is_member(conn, team_id, user_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
+
+
+def find_user_id(conn, username: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM users WHERE username = :username", {"username": username}
+    ).fetchone()
+    return None if row is None else row["id"]
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_team(payload: TeamCreate, user: CurrentUser, conn: Conn) -> TeamOut:
     created_at = now()
-    with conn:  # the team and its first member are created together or not at all
+    with write_transaction(conn):  # the team and its first member, together or not at all
         cursor = conn.execute(
             "INSERT INTO teams (name, created_by, created_at) VALUES (:name, :me, :ts)",
             {"name": payload.name, "me": user.id, "ts": created_at},
@@ -42,21 +54,19 @@ def list_teams(user: CurrentUser, conn: Conn) -> TeamList:
 
 @router.post("/{team_id}/members", status_code=status.HTTP_204_NO_CONTENT)
 def add_member(team_id: RowId, payload: MemberAdd, user: CurrentUser, conn: Conn) -> None:
-    if not is_member(conn, team_id, user.id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
-    member = conn.execute(
-        "SELECT id FROM users WHERE username = :username", {"username": payload.username}
-    ).fetchone()
-    if member is None:
-        # Same shape as FastAPI's own 422s, so clients parse one error format.
-        raise RequestValidationError(
-            [{"type": "value_error", "loc": ("body", "username"), "msg": "No such user"}]
-        )
-    with conn:
+    with write_transaction(conn):
+        # Checked under the write lock: someone removed mid-request can't re-add anyone.
+        require_member(conn, team_id, user.id)
+        member_id = find_user_id(conn, payload.username)
+        if member_id is None:
+            # Same shape as FastAPI's own 422s, so clients parse one error format.
+            raise RequestValidationError(
+                [{"type": "value_error", "loc": ("body", "username"), "msg": "No such user"}]
+            )
         conn.execute(
             "INSERT OR IGNORE INTO team_members (team_id, user_id, added_at)"
             " VALUES (:team_id, :user_id, :ts)",
-            {"team_id": team_id, "user_id": member["id"], "ts": now()},
+            {"team_id": team_id, "user_id": member_id, "ts": now()},
         )
 
 
@@ -67,27 +77,19 @@ def remove_member(team_id: RowId, username: UsernamePath, user: CurrentUser, con
     Membership is flat: any member can add or remove anyone. Notes the removed member owns
     stay shared with the team until they unshare them.
     """
-    if not is_member(conn, team_id, user.id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
-    params = {"team_id": team_id, "username": username}
-    with conn:
-        # One statement, so two members leaving at once can't empty the team.
-        cursor = conn.execute(
-            """
-            DELETE FROM team_members
-            WHERE team_id = :team_id
-              AND user_id = (SELECT id FROM users WHERE username = :username)
-              AND (SELECT COUNT(*) FROM team_members WHERE team_id = :team_id) > 1
-            """,
-            params,
-        )
-    if cursor.rowcount == 0:
-        still_member = conn.execute(
-            "SELECT 1 FROM team_members m JOIN users u ON u.id = m.user_id"
-            " WHERE m.team_id = :team_id AND u.username = :username",
-            params,
-        ).fetchone()
-        if still_member:
+    with write_transaction(conn):
+        require_member(conn, team_id, user.id)
+        member_id = find_user_id(conn, username)
+        if member_id is None or not is_member(conn, team_id, member_id):
+            return
+        member_count = conn.execute(
+            "SELECT COUNT(*) FROM team_members WHERE team_id = :team_id", {"team_id": team_id}
+        ).fetchone()[0]
+        if member_count == 1:
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "A team needs at least one member; it can't be left empty"
             )
+        conn.execute(
+            "DELETE FROM team_members WHERE team_id = :team_id AND user_id = :user_id",
+            {"team_id": team_id, "user_id": member_id},
+        )
