@@ -211,38 +211,6 @@ app/
 tests/          one file per feature, plus an auth test generated from every protected route
 ```
 
-## Commit history
-
-Each feature and fix commit is a vertical slice with its own tests, and lint and tests pass at
-every commit. Full history with diffs:
-[github.com/RossBlassingame/team-notes-api/commits/main](https://github.com/RossBlassingame/team-notes-api/commits/main).
-
-1. `docs: add design plan`
-2. `chore: scaffold FastAPI service with health check and tooling`
-3. `ci: run lint and tests on GitHub Actions`
-4. `feat(users): add registration and bearer-token auth`
-5. `feat(notes): add create, read, and list for private notes`
-6. `feat(notes): add update and delete for private notes`
-7. `feat(notes): require If-Match on updates to prevent lost updates`
-8. `feat(teams): add teams and membership`
-9. `feat(notes): share notes with multiple teams`
-10. `feat(notes): add search and pagination to note listing`
-11. `docs: write README with design choices and tradeoffs`
-
-After a separate review of the code, these commits followed:
-
-12. `fix: return 4xx instead of 500 for out-of-range ids and unencodable input`
-13. `fix(notes): read back writes inside their transaction`
-14. `fix: make error responses consistent`
-15. `test: cover parallel saves, unsharing from lists, and shared-note search`
-16. `docs: correct README claims found in code review`
-17. `feat(teams): let members remove members and leave teams`
-18. `fix: take the write lock before checks that guard a write`
-19. `fix(teams): reject unknown usernames when removing members`
-20. `docs: update README for member removal and its review`
-21. `docs: correct overstated claims in README and comments`
-22. `docs: align README design-choice section with the prompt`
-
 ## How I used AI
 
 I built this with Claude Code, an AI coding agent:
@@ -250,18 +218,19 @@ I built this with Claude Code, an AI coding agent:
 - **Planning.** Before any code, the agent drafted the design. Separate AI reviewers then
   critiqued it in several rounds, and the result is [PLAN.md](PLAN.md). I made the scope and
   product calls; for example, notes can be shared with multiple teams rather than one.
-- **Building.** The agent wrote the code and tests in the small slices above. Lint and the full
-  test suite had to pass before each commit.
+- **Building.** The agent wrote the code and tests in small vertical slices (see the
+  [commit history](https://github.com/RossBlassingame/team-notes-api/commits/main)). Lint and the full test
+  suite had to pass before each commit.
 - **Reviewing.** After the build, a fresh AI reviewer audited the code with reproduction
-  scripts. Commits 12–16 fix what it found: several malformed inputs that returned 500s, a race
-  in the read-back after an edit, inconsistent error shapes, and inaccurate claims in this
-  README.
-- **Member removal.** Commit 17 adds removing members, which the review rated the most serious
-  gap. (The README already listed it as a known limitation.) A second review of that commit
-  found a race: a member being removed could re-add themselves. Commit 18 fixes it by taking
-  the write lock before the checks, and its race tests fail when the lock is weakened.
-  Commit 19 aligns the error codes for adding and removing members.
+  scripts. The commits after the first README fix what it found: several malformed inputs that
+  returned 500s, a race in the read-back after an edit, inconsistent error shapes, and
+  inaccurate claims in this README.
+- **Member removal.** The review rated the inability to remove team members the most serious
+  gap, which the README had already listed as a known limitation, so I added it. A second
+  review of that change found a race: a member being removed could add themselves back. The
+  fix takes the write lock before the checks, and tests that race real threads cover it.
 - **Checking.** The walkthrough above was run against the live server, and the tests were run
   from a fresh clone, before committing.
-- **Timing.** The agent writes code fast: commits 2–11 span about 10 minutes. Most of the time
-  went into the plan, its review rounds, and the code review.
+- **Timing.** The agent writes code fast: the build commits, from scaffold through search, span
+  about 10 minutes. Most of the time went into the plan, its review rounds, and the code
+  reviews.
