@@ -58,6 +58,7 @@ class NoteOut(BaseModel):
     version: int
     created_at: str
     updated_at: str
+    shared_with: list[int] = Field(description="Ids of the teams this note is shared with")
 
 
 class NoteList(BaseModel):

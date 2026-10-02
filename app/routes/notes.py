@@ -1,18 +1,21 @@
+import json
 import re
 import sqlite3
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Response, status
 
-from app.auth import CurrentUser
+from app.auth import CurrentUser, User
 from app.db import Conn, now
-from app.policy import CAN_READ
+from app.policy import CAN_READ, is_member
 from app.schemas import NoteCreate, NoteList, NoteOut, NoteUpdate
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
 SELECT_NOTE = """
-    SELECT n.id, n.owner_id, n.title, n.body, n.version, n.created_at, n.updated_at
+    SELECT n.id, n.owner_id, n.title, n.body, n.version, n.created_at, n.updated_at,
+           (SELECT json_group_array(ns.team_id) FROM note_shares ns WHERE ns.note_id = n.id)
+               AS shared_with
     FROM notes n
 """
 
@@ -45,6 +48,16 @@ def stale_note() -> HTTPException:
     )
 
 
+def to_note(row: sqlite3.Row) -> NoteOut:
+    # json_group_array order isn't guaranteed; sort so responses are stable.
+    return NoteOut(**{**dict(row), "shared_with": sorted(json.loads(row["shared_with"]))})
+
+
+def require_owner(note: NoteOut, user: User) -> None:
+    if note.owner_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the note's owner can do this")
+
+
 def fetch_note(conn: sqlite3.Connection, note_id: int, user_id: int) -> NoteOut:
     row = conn.execute(
         f"{SELECT_NOTE} WHERE n.id = :id AND {CAN_READ}", {"id": note_id, "me": user_id}
@@ -52,7 +65,7 @@ def fetch_note(conn: sqlite3.Connection, note_id: int, user_id: int) -> NoteOut:
     if row is None:
         # Same answer for "doesn't exist" and "not yours", so ids leak nothing.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
-    return NoteOut(**row)
+    return to_note(row)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -76,7 +89,7 @@ def list_notes(user: CurrentUser, conn: Conn) -> NoteList:
         f"{SELECT_NOTE} WHERE {CAN_READ} ORDER BY n.updated_at DESC, n.id DESC",
         {"me": user.id},
     ).fetchall()
-    return NoteList(items=[NoteOut(**row) for row in rows])
+    return NoteList(items=[to_note(row) for row in rows])
 
 
 @router.get("/{note_id}")
@@ -129,6 +142,39 @@ def update_note(
 
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_note(note_id: int, user: CurrentUser, conn: Conn) -> None:
-    fetch_note(conn, note_id, user.id)
+    require_owner(fetch_note(conn, note_id, user.id), user)
     with conn:
-        conn.execute("DELETE FROM notes WHERE id = :id", {"id": note_id})
+        conn.execute("DELETE FROM notes WHERE id = :id", {"id": note_id})  # shares cascade
+
+
+@router.put(
+    "/{note_id}/shares/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={201: {"description": "Shared"}, 204: {"description": "Already shared"}},
+)
+def share_note(
+    note_id: int, team_id: int, user: CurrentUser, conn: Conn, response: Response
+) -> None:
+    require_owner(fetch_note(conn, note_id, user.id), user)
+    if not is_member(conn, team_id, user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
+    with conn:
+        # Sharing changes who can see the note, not its content, so the version (and
+        # ETag) stays put and nobody's in-progress edit is invalidated.
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO note_shares (note_id, team_id, shared_at)"
+            " VALUES (:note_id, :team_id, :ts)",
+            {"note_id": note_id, "team_id": team_id, "ts": now()},
+        )
+    if cursor.rowcount:
+        response.status_code = status.HTTP_201_CREATED
+
+
+@router.delete("/{note_id}/shares/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unshare_note(note_id: int, team_id: int, user: CurrentUser, conn: Conn) -> None:
+    require_owner(fetch_note(conn, note_id, user.id), user)
+    with conn:
+        conn.execute(
+            "DELETE FROM note_shares WHERE note_id = :note_id AND team_id = :team_id",
+            {"note_id": note_id, "team_id": team_id},
+        )

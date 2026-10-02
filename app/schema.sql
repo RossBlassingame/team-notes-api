@@ -30,3 +30,11 @@ CREATE TABLE IF NOT EXISTS team_members (
     PRIMARY KEY (team_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS team_members_user_id ON team_members(user_id);
+
+CREATE TABLE IF NOT EXISTS note_shares (
+    note_id     INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    team_id     INTEGER NOT NULL REFERENCES teams(id),
+    shared_at   TEXT NOT NULL,
+    PRIMARY KEY (note_id, team_id)
+);
+CREATE INDEX IF NOT EXISTS note_shares_team_id ON note_shares(team_id);
