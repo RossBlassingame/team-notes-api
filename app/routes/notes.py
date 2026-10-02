@@ -1,6 +1,8 @@
+import re
 import sqlite3
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Response, status
 
 from app.auth import CurrentUser
 from app.db import Conn, now
@@ -17,6 +19,30 @@ SELECT_NOTE = """
 
 def etag(version: int) -> str:
     return f'"{version}"'
+
+
+def expected_version(if_match: str | None) -> int:
+    """The version the client last read, from its If-Match header.
+
+    Only a single strong ETag is supported. A weak tag, `*`, or a list can never match,
+    so it gets 412 like any other stale value.
+    """
+    if if_match is None:
+        raise HTTPException(
+            status.HTTP_428_PRECONDITION_REQUIRED,
+            "Send If-Match with the ETag from your last read of this note",
+        )
+    match = re.fullmatch(r'"(\d+)"', if_match.strip())
+    if match is None:
+        raise stale_note()
+    return int(match.group(1))
+
+
+def stale_note() -> HTTPException:
+    return HTTPException(
+        status.HTTP_412_PRECONDITION_FAILED,
+        "Note changed since you last read it; fetch it again and reapply your edit",
+    )
 
 
 def fetch_note(conn: sqlite3.Connection, note_id: int, user_id: int) -> NoteOut:
@@ -62,9 +88,19 @@ def get_note(note_id: int, user: CurrentUser, conn: Conn, response: Response) ->
 
 @router.patch("/{note_id}")
 def update_note(
-    note_id: int, payload: NoteUpdate, user: CurrentUser, conn: Conn, response: Response
+    note_id: int,
+    payload: NoteUpdate,
+    user: CurrentUser,
+    conn: Conn,
+    response: Response,
+    if_match: Annotated[str | None, Header()] = None,
 ) -> NoteOut:
+    # Order matters: a note you can't read is 404 whatever you send, so 428/412 never
+    # confirm that it exists.
+    fetch_note(conn, note_id, user.id)
+    version = expected_version(if_match)
     with conn:
+        # Check and write in one statement, so two concurrent edits can't both succeed.
         cursor = conn.execute(
             f"""
             UPDATE notes AS n
@@ -72,18 +108,20 @@ def update_note(
                 body = COALESCE(:body, body),
                 version = version + 1,
                 updated_at = :ts
-            WHERE n.id = :id AND {CAN_READ}
+            WHERE n.id = :id AND n.version = :version AND {CAN_READ}
             """,
             {
                 "title": payload.title,
                 "body": payload.body,
                 "ts": now(),
                 "id": note_id,
+                "version": version,
                 "me": user.id,
             },
         )
     if cursor.rowcount == 0:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found")
+        fetch_note(conn, note_id, user.id)  # 404 if it was deleted or unshared meanwhile
+        raise stale_note()
     note = fetch_note(conn, note_id, user.id)
     response.headers["ETag"] = etag(note.version)
     return note

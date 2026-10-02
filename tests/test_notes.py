@@ -1,6 +1,10 @@
 import pytest
 
 
+def if_match(user, version=1):
+    return {**user.headers, "If-Match": f'"{version}"'}
+
+
 def create_note(client, user, **fields):
     response = client.post("/notes", json={"title": "Groceries", **fields}, headers=user.headers)
     assert response.status_code == 201, response.text
@@ -76,7 +80,7 @@ def test_update_title_only(client, alice):
     created = create_note(client, alice, body="eggs").json()
 
     response = client.patch(
-        f"/notes/{created['id']}", json={"title": "Shopping"}, headers=alice.headers
+        f"/notes/{created['id']}", json={"title": "Shopping"}, headers=if_match(alice)
     )
 
     assert response.status_code == 200
@@ -90,7 +94,9 @@ def test_update_title_only(client, alice):
 def test_update_body_only(client, alice):
     created = create_note(client, alice).json()
 
-    response = client.patch(f"/notes/{created['id']}", json={"body": "milk"}, headers=alice.headers)
+    response = client.patch(
+        f"/notes/{created['id']}", json={"body": "milk"}, headers=if_match(alice)
+    )
 
     assert (response.json()["title"], response.json()["body"]) == ("Groceries", "milk")
 
@@ -99,7 +105,7 @@ def test_edited_note_moves_to_top_of_list(client, alice):
     first = create_note(client, alice, title="first").json()
     create_note(client, alice, title="second")
 
-    client.patch(f"/notes/{first['id']}", json={"body": "edited"}, headers=alice.headers)
+    client.patch(f"/notes/{first['id']}", json={"body": "edited"}, headers=if_match(alice))
 
     items = client.get("/notes", headers=alice.headers).json()["items"]
     assert [note["title"] for note in items] == ["first", "second"]
@@ -113,7 +119,7 @@ def test_edited_note_moves_to_top_of_list(client, alice):
 def test_invalid_update_is_rejected(client, alice, payload):
     note_id = create_note(client, alice).json()["id"]
 
-    response = client.patch(f"/notes/{note_id}", json=payload, headers=alice.headers)
+    response = client.patch(f"/notes/{note_id}", json=payload, headers=if_match(alice))
 
     assert response.status_code == 422
 
@@ -129,6 +135,6 @@ def test_delete_note(client, alice):
 def test_other_users_cannot_update_or_delete(client, alice, bob):
     location = create_note(client, alice).headers["Location"]
 
-    assert client.patch(location, json={"title": "mine"}, headers=bob.headers).status_code == 404
+    assert client.patch(location, json={"title": "mine"}, headers=if_match(bob)).status_code == 404
     assert client.delete(location, headers=bob.headers).status_code == 404
     assert client.get(location, headers=alice.headers).json()["title"] == "Groceries"
