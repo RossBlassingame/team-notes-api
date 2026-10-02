@@ -15,3 +15,18 @@ CREATE TABLE IF NOT EXISTS notes (
     updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS notes_owner_id ON notes(owner_id);
+
+CREATE TABLE IF NOT EXISTS teams (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    created_by  INTEGER NOT NULL REFERENCES users(id),
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+    team_id     INTEGER NOT NULL REFERENCES teams(id),
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    added_at    TEXT NOT NULL,
+    PRIMARY KEY (team_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS team_members_user_id ON team_members(user_id);

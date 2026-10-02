@@ -5,4 +5,14 @@ never disagree about visibility. Anyone who can read a note can edit its content
 the owner can delete it.
 """
 
+import sqlite3
+
 CAN_READ = "(n.owner_id = :me)"
+
+
+def is_member(conn: sqlite3.Connection, team_id: int, user_id: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM team_members WHERE team_id = :team_id AND user_id = :user_id",
+        {"team_id": team_id, "user_id": user_id},
+    ).fetchone()
+    return row is not None

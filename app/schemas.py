@@ -62,3 +62,25 @@ class NoteOut(BaseModel):
 
 class NoteList(BaseModel):
     items: list[NoteOut]
+
+
+TeamName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+
+class TeamCreate(Input):
+    name: TeamName
+
+
+class MemberAdd(Input):
+    username: Username
+
+
+class TeamOut(BaseModel):
+    id: int
+    name: str
+    created_by: int
+    created_at: str
+
+
+class TeamList(BaseModel):
+    items: list[TeamOut]

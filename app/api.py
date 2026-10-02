@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from app.db import init_schema
-from app.routes import notes, users
+from app.routes import notes, teams, users
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -17,6 +17,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.state.db_path = db_path
     app.include_router(users.router)
     app.include_router(notes.router)
+    app.include_router(teams.router)
 
     @app.get("/health", tags=["health"])
     def health() -> dict[str, str]:
