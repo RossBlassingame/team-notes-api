@@ -59,6 +59,9 @@ def test_unknown_username_is_422(client, alice):
     )
 
     assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {"type": "value_error", "loc": ["body", "username"], "msg": "No such user"}
+    ]
 
 
 def test_non_member_cannot_add_members(client, alice, bob):

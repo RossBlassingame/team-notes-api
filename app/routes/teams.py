@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, status
+from fastapi.exceptions import RequestValidationError
 
 from app.auth import CurrentUser
 from app.db import Conn, now
@@ -47,7 +48,10 @@ def add_member(team_id: RowId, payload: MemberAdd, user: CurrentUser, conn: Conn
         "SELECT id FROM users WHERE username = :username", {"username": payload.username}
     ).fetchone()
     if member is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "No such user")
+        # Same shape as FastAPI's own 422s, so clients parse one error format.
+        raise RequestValidationError(
+            [{"type": "value_error", "loc": ("body", "username"), "msg": "No such user"}]
+        )
     with conn:
         conn.execute(
             "INSERT OR IGNORE INTO team_members (team_id, user_id, added_at)"

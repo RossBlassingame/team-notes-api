@@ -89,8 +89,9 @@ def test_shared_note_appears_once_in_list_even_via_two_teams(client, users, team
 
 def test_sharing_is_idempotent_and_keeps_the_etag(client, users, teams, note):
     alice = users["alice"]
-    assert share(client, alice, note, teams["platform"]).status_code == 201
-    assert share(client, alice, note, teams["platform"]).status_code == 204
+    first, repeat = (share(client, alice, note, teams["platform"]) for _ in range(2))
+    assert (first.status_code, first.content) == (201, b"")
+    assert (repeat.status_code, repeat.content) == (204, b"")
 
     # Sharing isn't a content edit: the owner's ETag from before sharing still works.
     assert get(client, alice, note).headers["ETag"] == '"1"'

@@ -54,7 +54,7 @@ def expected_version(if_match: str | None) -> int:
 def stale_note() -> HTTPException:
     return HTTPException(
         status.HTTP_412_PRECONDITION_FAILED,
-        "Note changed since you last read it; fetch it again and reapply your edit",
+        "If-Match doesn't match the note's current ETag; fetch it again and reapply your edit",
     )
 
 
@@ -179,9 +179,7 @@ def delete_note(note_id: RowId, user: CurrentUser, conn: Conn) -> None:
     status_code=status.HTTP_204_NO_CONTENT,
     responses={201: {"description": "Shared"}, 204: {"description": "Already shared"}},
 )
-def share_note(
-    note_id: RowId, team_id: RowId, user: CurrentUser, conn: Conn, response: Response
-) -> None:
+def share_note(note_id: RowId, team_id: RowId, user: CurrentUser, conn: Conn) -> Response:
     require_owner(fetch_note(conn, note_id, user.id), user)
     if not is_member(conn, team_id, user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
@@ -197,8 +195,8 @@ def share_note(
     except sqlite3.IntegrityError:
         # The note was deleted after we checked it (OR IGNORE doesn't cover FK failures).
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found") from None
-    if cursor.rowcount:
-        response.status_code = status.HTTP_201_CREATED
+    created = cursor.rowcount == 1
+    return Response(status_code=status.HTTP_201_CREATED if created else status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/{note_id}/shares/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
