@@ -89,20 +89,19 @@ All endpoints except `GET /health` and `POST /users` need `Authorization: Bearer
 | See it in list and search results | yes | yes | not included |
 | Delete, share, unshare | yes | `403` | `404` |
 
-## Design choices
+## Design choices I spent the most time on
 
 ### 1. Sharing and authorization model
 
 Notes start private. The owner can share a note with any number of teams they belong to.
 Access is computed from team membership at query time and never copied, so removing someone
-from a team cuts off their access through that team on their very next request. Every write a
-request makes runs under SQLite's write lock (`BEGIN IMMEDIATE`), taken before the checks that guard it. So a member being removed
-can't slip a write through between "are you a member?" and the write itself.
+from a team cuts off their access through that team on their very next request.
 
 The most important property is that **one SQL predicate decides visibility**
-([`app/policy.py`](app/policy.py)). It is ANDed into every note read and the content update (list,
-search, fetch, update); owner-only writes look the note up through it first. A common authorization bug in APIs like this is a list or search endpoint that filters
-differently from the detail endpoint. With a single predicate, that can't happen.
+([`app/policy.py`](app/policy.py)). It is ANDed into every note read and the content update
+(list, search, fetch, update); owner-only writes look the note up through it first. A common
+authorization bug in APIs like this is a list or search endpoint that filters differently from
+the detail endpoint. With a single predicate, that can't happen.
 
 Status codes:
 - `404` for anything you can't read, so status codes don't reveal whether a note you can't
@@ -120,10 +119,12 @@ Alternatives I considered:
 - Team-owned notes: leaves no private drafts.
 - Roles: out of scope.
 
-### 2. Preventing lost updates with ETag and If-Match
+### 2. Concurrency: lost updates and atomic checks
 
-With shared notes, two people (or one person in two tabs) will edit the same note.
-Last-write-wins would silently throw away someone's work.
+Shared notes mean concurrent requests, and two things can go wrong.
+
+**Lost updates.** Two people, or one person in two tabs, edit the same note. Last-write-wins
+would silently throw away someone's work.
 
 - Each note has a `version`, exposed as a strong `ETag`.
 - `PATCH` **requires** `If-Match`: a missing header returns `428`, a stale one `412`.
@@ -133,11 +134,20 @@ Last-write-wins would silently throw away someone's work.
 - Sharing doesn't change the version. It changes who sees the note, not its content, so it
   never makes an in-progress edit's ETag stale.
 
+**Checks that go stale before the write.** Most writes check something first: is the caller a
+member, does the note belong to them. Every write a request makes runs under SQLite's write lock
+(`BEGIN IMMEDIATE`), and the lock is taken before those checks, so nothing can change in
+between. Without the lock, a member who was being removed could add themselves back partway
+through the removal. Tests that race real threads cover this case.
+
 Alternatives I considered:
 - Last-write-wins: silently loses edits.
 - Field-level merging: more complex for little gain here.
-- Pessimistic locks: a poor fit for stateless HTTP.
+- Pessimistic locks held across requests (checking a note out to edit it): a poor fit for
+  stateless HTTP. The write lock above lasts for a single request.
 - CRDT/OT real-time collaboration: a different product.
+- Folding every check into each write's SQL: it works, but each handler needs its own trick.
+  One lock rule is easier to get right.
 
 ### 3. Minimal storage, auth, and scope
 
@@ -204,7 +214,8 @@ tests/          one file per feature, plus an auth test generated from every pro
 ## Commit history
 
 Each feature and fix commit is a vertical slice with its own tests, and lint and tests pass at
-every commit.
+every commit. Full history with diffs:
+[github.com/RossBlassingame/team-notes-api/commits/main](https://github.com/RossBlassingame/team-notes-api/commits/main).
 
 1. `docs: add design plan`
 2. `chore: scaffold FastAPI service with health check and tooling`
@@ -230,6 +241,7 @@ After a separate review of the code, these commits followed:
 19. `fix(teams): reject unknown usernames when removing members`
 20. `docs: update README for member removal and its review`
 21. `docs: correct overstated claims in README and comments`
+22. `docs: align README design-choice section with the prompt`
 
 ## How I used AI
 
